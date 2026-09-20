@@ -9,6 +9,8 @@ import '../color_theme_store.dart';
 import '../config/env.dart';
 import '../config/feedmatter_env.dart';
 import '../device_id.dart';
+import '../logger.dart';
+import '../preferences/service_region.dart';
 import '../theme_store.dart';
 
 bool _initialized = false;

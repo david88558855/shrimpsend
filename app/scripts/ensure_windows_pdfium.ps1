@@ -3,15 +3,20 @@
   pdfrx Windows 构建依赖 pdfium.dll。插件 CMake 在 configure 阶段从 GitHub 下载
   pdfium-win-x64.tgz 并用 cmake -E tar 解压；网络受限时易出现 0 字节包，导致后续 COPY 失败。
 
-  本脚本在 flutter build windows 之前，将内置 pdfium（app/windows/pdfium_vendor）或可靠下载
-  预置到 pdfrx 期望路径：build/windows/x64/pdfium/chromium%2F7202/
+  本脚本在 flutter build windows 之前，尝试将内置 pdfium（app/windows/pdfium_vendor）
+  或可靠下载预置到 pdfrx 期望路径。
+
+  如果预置失败，脚本仅发出警告而不中断构建——CMake configure 会自行下载。
 
   Usage（app 目录）:
     .\scripts\ensure_windows_pdfium.ps1
 #>
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 $AppDir = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { Get-Location }
+
+# pdfrx 2.x 使用更新的 pdfium 版本；如 CMake 下载失败可在此调整。
+# 常见版本号：pdfrx 1.x → chromium%2F7202，pdfrx 2.x → chromium%2F7xxx
 $PdfiumReleaseDirName = 'chromium%2F7202'
 $BuildPdfiumDir = Join-Path $AppDir "build\windows\x64\pdfium\$PdfiumReleaseDirName"
 $VendorDir = Join-Path $AppDir 'windows\pdfium_vendor\x64'
@@ -43,10 +48,12 @@ function Copy-PdfiumTree([string] $SourceRoot, [string] $DestRoot) {
 
 function Install-PdfiumFromVendor {
     if (-not (Test-PdfiumTree $VendorDir)) {
-        Write-Error "Built-in PDFium vendor tree is incomplete: $VendorDir"
+        Write-Warning "Built-in PDFium vendor tree is incomplete: $VendorDir — skipping"
+        return $false
     }
     Write-Host "PDFium -> $BuildPdfiumDir (from vendor)"
     Copy-PdfiumTree $VendorDir $BuildPdfiumDir
+    return $true
 }
 
 function Install-PdfiumFromDownload {
@@ -65,13 +72,15 @@ function Install-PdfiumFromDownload {
         try {
             Invoke-WebRequest -Uri $DownloadUrl -OutFile $archivePath -UseBasicParsing
         } catch {
-            Write-Error "PDFium download failed: $_"
+            Write-Warning "PDFium download failed: $_ — CMake will attempt its own download"
+            return $false
         }
     }
 
     $archiveSize = (Get-Item -LiteralPath $archivePath).Length
     if ($archiveSize -lt 100KB) {
-        Write-Error "PDFium archive too small ($archiveSize bytes): $archivePath"
+        Write-Warning "PDFium archive too small ($archiveSize bytes): $archivePath — CMake will attempt its own download"
+        return $false
     }
 
     Write-Host "Extract PDFium -> $BuildPdfiumDir"
@@ -79,11 +88,13 @@ function Install-PdfiumFromDownload {
     try {
         tar -zxf $ArchiveName
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "tar failed to extract PDFium (exit $LASTEXITCODE)"
+            Write-Warning "tar failed to extract PDFium (exit $LASTEXITCODE) — CMake will attempt its own download"
+            return $false
         }
     } finally {
         Pop-Location
     }
+    return $true
 }
 
 if (Test-PdfiumTree $BuildPdfiumDir) {
@@ -98,7 +109,7 @@ if (Test-PdfiumTree $VendorDir) {
 }
 
 if (-not (Test-PdfiumTree $BuildPdfiumDir)) {
-    Write-Error "PDFium setup failed; expected bin\$PdfiumDllName under $BuildPdfiumDir"
+    Write-Warning "PDFium pre-setup did not complete; CMake configure will attempt its own download."
 }
 
-Write-Host 'PDFium ready for pdfrx Windows build.'
+Write-Host 'PDFium check done.'

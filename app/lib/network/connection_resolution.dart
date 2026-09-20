@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../api/devices.dart';
 import '../l10n/generated/app_localizations.dart';
 import '../providers/device_provider.dart';
 import 'link_models.dart';

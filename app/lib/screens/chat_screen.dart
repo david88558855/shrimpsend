@@ -22,6 +22,7 @@ import '../device_id.dart';
 import '../preferences/clipboard_preferences.dart';
 import '../providers/app_locale.dart';
 import '../providers/app_mode_provider.dart';
+import '../providers/auth_provider.dart';
 import '../providers/device_provider.dart';
 import '../providers/webdav_provider.dart';
 import 'package:uuid/uuid.dart';
@@ -8681,7 +8682,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         context,
         colors,
         isDark,
-        false,
       ),
     );
   }
