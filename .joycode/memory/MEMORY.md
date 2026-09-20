@@ -1,0 +1,1 @@
+- [project-offline-mode](project_offline_mode.md) — ShrimpSend已移除云账户/登录/注册模块，改为纯本地LAN模式

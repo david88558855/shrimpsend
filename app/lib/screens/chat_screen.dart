@@ -21,10 +21,7 @@ import '../config/env.dart';
 import '../device_id.dart';
 import '../preferences/clipboard_preferences.dart';
 import '../providers/app_locale.dart';
-import '../providers/auth_provider.dart';
 import '../providers/app_mode_provider.dart';
-import '../providers/auth_session_provider.dart';
-import '../services/auth_session_controller.dart';
 import '../providers/device_provider.dart';
 import '../providers/webdav_provider.dart';
 import 'package:uuid/uuid.dart';
@@ -99,7 +96,6 @@ import '../ui/app_ui.dart';
 import '../ui/platform_performance.dart';
 import '../webrtc/webrtc_manager.dart';
 import '../webrtc/signaling_channel.dart';
-import 'qr_scanner_screen.dart';
 import '../services/native_tab_bar_service.dart';
 
 /// Number of messages per page for pagination. Adjust for debugging.
@@ -452,29 +448,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   final Map<String, _CachedChatTimeline> _chatTimelineCache = {};
 
   /// Current user id for local message cache; set on first _loadHistory.
+  /// 离线模式始终使用离线用户 ID。
   String? _userId;
   Future<String?> _getCurrentUserId() async {
-    // 未登录 / 离线模式必须以离线用户写入 SQLite，不能沿用缓存里可能残留的登录 userId。
-    if (_isOffline) {
-      final oid = await getOrCreateOfflineUserId();
-      _userId = oid;
-      return oid;
-    }
     if (_userId != null) return _userId;
-    _userId = await getStoredUserId();
+    _userId = await getOrCreateOfflineUserId();
     return _userId;
   }
 
-  /// UserIds to query messages from DB.
-  /// Offline: only the offline userId.
-  /// Online: current userId + offline userId (for un-migrated messages).
+  /// UserIds to query messages from DB —— 离线模式仅使用离线 userId。
   Future<List<String>> _getQueryUserIds() async {
     final offlineId = await getOrCreateOfflineUserId();
-    if (_isOffline) return [offlineId];
-    final userId = await _getCurrentUserId();
-    if (userId == null || userId.isEmpty) return [offlineId];
-    if (userId == offlineId) return [offlineId];
-    return [userId, offlineId];
+    return [offlineId];
   }
 
   /// Merge LAN-discovered devices with cloud devices by deviceId; prefer LAN's lanHttpUrl when both present.
@@ -563,7 +548,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     _setMobileDevicePanelVisible(false);
   }
 
-  ProviderSubscription? _authSub;
   ProviderSubscription? _selectedDeviceSub;
   ProviderSubscription<ConnectionOrchestratorState>? _connectionOrchestratorSub;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
@@ -611,28 +595,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     _webrtcManager.onFileCancelled = _onWebRTCFileCancelled;
     _webrtcManager.onStateChange = (sid, state) =>
         logChat.info('WebRTC session=$sid state=$state');
-    _authSub = ref.listenManual<AuthState>(authProvider, (prev, next) {
-      if (prev?.isLoggedIn != next.isLoggedIn) {
-        logChat.info('chat_screen auth changed: loggedIn=${next.isLoggedIn}');
-        _userId = null;
-        _connected = false;
-        _client?.disconnect();
-        _client = null;
-        if (!next.isLoggedIn) {
-          if (!mounted) return;
-          // Tear down the always-on foreground service on logout.
-          unawaited(TransferKeepAlive.instance.disablePersistent());
-          ref.read(selectedSendModeProvider.notifier).resetForLogout();
-          if (ref.read(selectedDeviceIdProvider) != null) {
-            ref.read(selectedDeviceIdProvider.notifier).select(null);
-          }
-          // AppEntryScreen replaces ChatScreen; do not restart _init().
-          return;
-        }
-        if (!mounted) return;
-        unawaited(_init());
-      }
-    });
     _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
       unawaited(_handleConnectivityChanged(results));
     });
@@ -989,7 +951,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   }
 
   Future<void> _markPresenceOffline(String reason) async {
-    if (_deviceId.isEmpty || _isOffline) return;
+    // 离线模式不需要标记在线状态
+    return;
     try {
       final dto = await updateDevicePresence(
         _deviceId,
@@ -1027,13 +990,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     if (_presencePausedByLifecycle) return;
 
     final probing = ref.read(devicesProbingProvider);
-    final loggedIn = ref.read(authProvider).isLoggedIn;
-    final cloudActive = ref.read(isCloudSessionActiveProvider);
-    final shouldRefreshCloud = loggedIn && cloudActive;
-
-    if (shouldRefreshCloud) {
-      await _refreshCloudDeviceRosterSnapshot();
-    }
 
     if (probing) {
       logChat.fine('roster.fallback skip probe (already probing)');
@@ -1083,12 +1039,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
   Future<void> _refreshRosterAndProbeSelected(String reason) async {
     if (!mounted) return;
-    final loggedIn = ref.read(authProvider).isLoggedIn;
-    final cloudActive = ref.read(isCloudSessionActiveProvider);
-    if (loggedIn && cloudActive) {
-      logChat.fine('roster snapshot refresh reason=$reason');
-      await _refreshCloudDeviceRosterSnapshot();
-    }
     if (!mounted || ref.read(devicesProbingProvider)) return;
     final selected = ref.read(selectedDeviceIdProvider);
     if (selected != null && selected != s3VirtualDeviceId) {
@@ -1100,24 +1050,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final peerId = ref.read(selectedDeviceIdProvider);
     if (peerId == null || peerId == s3VirtualDeviceId) return;
 
-    final isLoggedIn = ref.read(authProvider).isLoggedIn;
-    final isRegisteredPeer = ref
-        .read(myDevicesProvider)
-        .any((d) => d.deviceId == peerId);
     final auto = ref.read(chatSendModeAutoProvider);
     final preferred = ref.read(selectedSendModeProvider);
     final resolved = auto
         ? resolveSendModeAutoPreferHttp(
             candidates: orchestrator.candidates,
-            isLoggedIn: isLoggedIn,
-            isRegisteredPeer: isRegisteredPeer,
             fallback: preferred,
           )
         : resolveSendModeWithMemory(
             preferred: preferred,
             candidates: orchestrator.candidates,
-            isLoggedIn: isLoggedIn,
-            isRegisteredPeer: isRegisteredPeer,
           );
     if (resolved != preferred) {
       logChat.info(
@@ -1601,17 +1543,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     if (!mounted) return;
     if (ref.read(devicesProbingProvider)) return;
 
-    final loggedIn = ref.read(authProvider).isLoggedIn;
-    final cloudActive = ref.read(isCloudSessionActiveProvider);
-    final shouldRefreshCloud = loggedIn && cloudActive;
-
-    if (shouldRefreshCloud) {
-      await _checkS3Config();
-      if (!mounted) return;
-      await _refreshCloudDeviceRosterSnapshot();
-      if (!mounted) return;
-    }
-
     if (_lanDiscovery != null) {
       await _lanDiscovery!.restartLanDiscovery();
       await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -1626,9 +1557,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     if (!mounted) return;
     final selected = ref.read(selectedDeviceIdProvider);
     if (selected == null || selected == s3VirtualDeviceId) {
-      if (ref.read(authProvider).isLoggedIn) {
-        await _checkS3Config();
-      }
       return;
     }
 
@@ -1839,32 +1767,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           }
         case ConnectionDiagnosticStepId.s3:
           reporter.beginStep(stepId);
-          if (!ref.read(authProvider).isLoggedIn) {
+          await _checkS3Config();
+          if (!mounted || !isCurrent()) return;
+          final s3Configured = ref.read(s3ConfiguredProvider);
+          final s3Online = ref.read(s3OnlineProvider);
+          if (!s3Configured) {
             reporter.finishFailure(
               stepId,
-              reason: l10n.connectionDiagReasonS3LoginRequired,
+              reason: l10n.connectionDiagReasonS3NotConfigured,
+            );
+          } else if (s3Online) {
+            reporter.finishSuccess(
+              stepId,
+              reason: l10n.connectionDiagReasonS3Online,
             );
           } else {
-            await _checkS3Config();
-            if (!mounted || !isCurrent()) return;
-            final s3Configured = ref.read(s3ConfiguredProvider);
-            final s3Online = ref.read(s3OnlineProvider);
-            if (!s3Configured) {
-              reporter.finishFailure(
-                stepId,
-                reason: l10n.connectionDiagReasonS3NotConfigured,
-              );
-            } else if (s3Online) {
-              reporter.finishSuccess(
-                stepId,
-                reason: l10n.connectionDiagReasonS3Online,
-              );
-            } else {
-              reporter.finishFailure(
-                stepId,
-                reason: l10n.connectionDiagReasonS3Unavailable,
-              );
-            }
+            reporter.finishFailure(
+              stepId,
+              reason: l10n.connectionDiagReasonS3Unavailable,
+            );
           }
       }
     }
@@ -1912,10 +1833,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       await deleteDevice(deviceId);
       if (!mounted) return;
       ref.read(cloudDeviceRosterProvider.notifier).applyRemove(deviceId);
-      await ref.read(authProvider.notifier).clearAuth();
       if (!mounted) return;
       AppToast.show(context, message: _l10n.chatScreenToastDeletedThisDevice);
-      Navigator.of(context).pushNamedAndRemoveUntil('/login', (_) => false);
     } catch (e) {
       logChat.warning('deleteThisDevice failed: $e');
       if (mounted) {
@@ -2251,9 +2170,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         userIds: queryUserIds,
         threadKey: threadKey,
       );
-      if (!_isOffline) {
-        await deleteThreadMessages(threadKey);
-      }
+      // 离线模式不调用云端删除
       await _clearChatTimeline();
       _fileMetaByMessageId.clear();
       if (deleteCache) {
@@ -2282,7 +2199,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       if (!mounted) return;
       ref.read(s3ConfiguredProvider.notifier).state = ok;
       var online = false;
-      if (ok && ref.read(authProvider).isLoggedIn) {
+      if (ok) {
         online = await checkS3Online();
       }
       if (mounted) {
@@ -2537,10 +2454,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   ) async {
     if (!mounted) return;
     final hasNetwork = results.any((r) => r != ConnectivityResult.none);
-    if (hasNetwork && _statusCheckDone && _effectiveOffline && !_isOffline) {
-      if (mounted) setState(() => _statusCheckDone = false);
-      await _checkServerConnection();
-    }
+    // 离线模式不检查服务器连接状态
 
     final signature = _networkSignature(results);
     if (_lastNetworkSignature == signature) return;
@@ -2603,136 +2517,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       });
     }
 
-    final isOfflineMode = ref.read(isOfflineModeProvider);
-    if (isOfflineMode) {
-      if (!isCurrentCheck()) return;
-      setState(() => _statusCheckDone = true);
-      _showStatusCheckToast();
-      probeDevicesIfCurrent();
-      return;
-    }
-
-    final session = ref.read(authSessionControllerProvider.notifier);
-
-    try {
-      await fetchUserProfile().timeout(const Duration(seconds: 8));
-      if (!isCurrentCheck()) return;
-      session.markServerReachable();
-      if (!isCurrentCheck()) return;
-      setState(() => _statusCheckDone = true);
-      _showStatusCheckToast();
-      unawaited(
-        _runPostServerConnectSetup(
-          checkGeneration: checkGeneration,
-          probeDevicesIfCurrent: probeDevicesIfCurrent,
-        ),
-      );
-    } on SessionUnavailableException catch (e) {
-      if (!isCurrentCheck()) return;
-      logChat.warning(
-        '_checkServerConnection session unavailable kind=${e.kind}: $e',
-      );
-      if (e.isTransient) {
-        session.markNetworkUnavailable();
-      }
-      setState(() => _statusCheckDone = true);
-      _showStatusCheckToast();
-      probeDevicesIfCurrent();
-    } on TimeoutException catch (e) {
-      if (!isCurrentCheck()) return;
-      logChat.warning(
-        '_checkServerConnection timeout, fallback to offline: $e',
-      );
-      session.markNetworkUnavailable();
-      setState(() => _statusCheckDone = true);
-      _showStatusCheckToast();
-      probeDevicesIfCurrent();
-    } catch (e) {
-      if (!isCurrentCheck()) return;
-      logChat.warning('_checkServerConnection failed, fallback to offline: $e');
-      session.markNetworkUnavailable();
-      setState(() => _statusCheckDone = true);
-      _showStatusCheckToast();
-      probeDevicesIfCurrent();
-    }
-  }
-
-  Future<void> _runPostServerConnectSetup({
-    required int checkGeneration,
-    required void Function() probeDevicesIfCurrent,
-  }) async {
-    bool isCurrentCheck() =>
-        mounted && checkGeneration == _serverConnectionCheckGeneration;
-
-    try {
-      await registerDevice(
-        _deviceId,
-        _deviceName,
-        platform: Platform.operatingSystem,
-        sessionId: _presenceSessionId,
-      );
-    } catch (e) {
-      logChat.warning(
-        '_runPostServerConnectSetup registerDevice failed (non-blocking): $e',
-      );
-    }
+    // Always offline mode — skip server connection check
     if (!isCurrentCheck()) return;
-
-    _hasNoMoreHistory = false;
-    try {
-      await _refreshCloudDeviceRosterSnapshot();
-    } catch (e) {
-      logChat.warning(
-        '_runPostServerConnectSetup refresh roster failed: $e',
-      );
-    }
-    if (!isCurrentCheck()) return;
-
-    try {
-      await _restoreResumableS3Transfers();
-    } catch (e) {
-      logChat.warning(
-        '_runPostServerConnectSetup restore S3 transfers failed: $e',
-      );
-    }
-    if (!isCurrentCheck()) return;
-
-    try {
-      await _restoreResumableWebRTCTransfers();
-    } catch (e) {
-      logChat.warning(
-        '_runPostServerConnectSetup restore WebRTC transfers failed: $e',
-      );
-    }
-    if (!isCurrentCheck()) return;
-
-    _connectCentrifuge();
-    try {
-      await _loadHistory();
-    } catch (e) {
-      logChat.warning('_runPostServerConnectSetup loadHistory failed: $e');
-    }
-    if (!isCurrentCheck()) return;
+    setState(() => _statusCheckDone = true);
+    _showStatusCheckToast();
     probeDevicesIfCurrent();
   }
 
   void _showStatusCheckToast() {
     if (!mounted) return;
-    final String message;
-    final offline = ref.read(isOfflineModeProvider);
-    final phase = ref.read(authSessionPhaseProvider);
-    if (offline) {
-      message = _l10n.chatScreenConnNotLoggedInHttp;
-    } else if (phase == AuthSessionPhase.networkUnavailable) {
-      message = _l10n.chatScreenConnOffline;
-    } else if (phase == AuthSessionPhase.authenticated) {
-      message = _l10n.chatScreenConnServerOk;
-    } else {
-      return;
-    }
     AppToast.show(
       context,
-      message: message,
+      message: _l10n.chatScreenConnNotLoggedInHttp,
       duration: const Duration(seconds: 2),
     );
   }
@@ -2761,14 +2557,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     return !_isRenderableChatType(type);
   }
 
+  /// 离线模式始终使用离线账户标识。
   Future<String> _accountPartForThreadKey() async {
-    if (_isOffline) {
-      return accountPartOffline(await getOrCreateOfflineUserId());
-    }
-    final uid = await getStoredUserId();
-    if (uid != null && uid.isNotEmpty) {
-      return accountPartLoggedIn(uid);
-    }
     return accountPartOffline(await getOrCreateOfflineUserId());
   }
 
@@ -2884,9 +2674,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
   void _runDeferredSelectionSideEffects(String? prev, String? next) {
     if (prev != next) {
-      if (!ref.read(authProvider).isLoggedIn) {
-        _chatTimelineCache.clear();
-      }
+      _chatTimelineCache.clear();
       if (next != null) {
         Analytics.track(AnalyticsEvents.chatSessionOpen, {
           'session_type': next == s3VirtualDeviceId
@@ -2934,7 +2722,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     try {
       final userId = await _getCurrentUserId();
       if (!mounted) return;
-      if (!_isOffline && (userId == null || userId.isEmpty)) return;
       final queryUserIds = await _getQueryUserIds();
       if (!mounted) return;
       final threadKey = await _threadKeyForCurrentSelection();
@@ -3139,7 +2926,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   Future<void> _loadMoreHistory() async {
     if (_loadingMore || _hasNoMoreHistory) return;
     final userId = await _getCurrentUserId();
-    if (!_isOffline && (userId == null || userId.isEmpty)) return;
     final queryUserIds = await _getQueryUserIds();
     final threadKey = await _threadKeyForCurrentSelection();
     if (threadKey == null) {
@@ -5529,8 +5315,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         ref
             .read(myDevicesProvider)
             .any((d) => d.deviceId == convDeviceIdForMode);
-    if (!ref.read(authProvider).isLoggedIn &&
-        convDeviceIdForMode != s3VirtualDeviceId) {
+    if (convDeviceIdForMode != s3VirtualDeviceId) {
       sendMode = SendMode.nearby;
     } else if (convDeviceIdForMode != s3VirtualDeviceId &&
         !peerIsRegistered &&
@@ -8803,7 +8588,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     _webrtcManager.closeAll();
     _lanReceiver?.stop();
     _connectivitySub?.cancel();
-    _authSub?.close();
     _selectedDeviceSub?.close();
     _connectionOrchestratorSub?.close();
     _chatController.dispose();
@@ -8817,10 +8601,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
   Future<void> _openAddWebDavConnection() async {
     _composerKey.currentState?.unfocus();
-    if (!ref.read(authProvider).isLoggedIn) {
-      await Navigator.pushNamed(context, '/login');
-      return;
-    }
     if (!await ensureCanAddWebDav(context)) return;
     if (!mounted) return;
     final ok = await Navigator.push<bool>(
@@ -8835,8 +8615,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   }
 
   Widget _buildMainLayout({
-    required bool isOffline,
-    required bool isAuthOffline,
     required bool mobileHomeTabs,
     required ChatColors colors,
     required bool isDark,
@@ -8846,13 +8624,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       deviceName: _deviceName,
       myDeviceId: _deviceId.isEmpty ? null : _deviceId,
       statusCheckDone: _statusCheckDone,
-      isLoggedIn: !isAuthOffline,
       compactDeviceListChrome: mobileHomeTabs,
-      authSessionPhase: ref.watch(authSessionPhaseProvider),
-      onLoginTap: () {
-        _composerKey.currentState?.unfocus();
-        Navigator.pushNamed(context, '/login');
-      },
       onRefresh: _manualRefreshDevices,
       onShowSettings: () async {
         _composerKey.currentState?.unfocus();
@@ -8864,9 +8636,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         await _refreshReceiveDir();
         _checkS3Config();
       },
-      onSessionDeviceSettings: !isOffline && ref.watch(authProvider).isLoggedIn
-          ? _openSessionDeviceSettings
-          : null,
       onSearch: () {
         _composerKey.currentState?.unfocus();
         Navigator.push(
@@ -8874,16 +8643,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           MaterialPageRoute(builder: (_) => const MessageSearchScreen()),
         );
       },
-      onScanTap: !isOffline
-          ? () async {
-              _composerKey.currentState?.unfocus();
-              await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const QrScannerScreen()),
-              );
-            }
-          : null,
-      onAddWebDavTap: !isOffline ? () => _openAddWebDavConnection() : null,
       onFileManager: () {
         _composerKey.currentState?.unfocus();
         if (mobileHomeTabs) {
@@ -8922,7 +8681,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         context,
         colors,
         isDark,
-        ref.watch(authProvider).isLoggedIn,
+        false,
       ),
     );
   }
@@ -9036,9 +8795,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         _syncNativeTabBarState();
       });
     }
-    final isOffline = ref.watch(effectiveOfflineModeProvider);
-    final isAuthOffline = ref.watch(isOfflineModeProvider);
-
     final colors = ChatColors.of(context);
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
@@ -9089,16 +8845,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                     ? DesktopPasteShortcuts(
                         onPasteFiles: _handleDesktopPasteFromClipboard,
                         child: _buildChatBodyStack(
-                          isOffline: isOffline,
-                          isAuthOffline: isAuthOffline,
                           colors: colors,
                           isDark: isDark,
                           selectedDeviceId: selectedDeviceId,
                         ),
                       )
                     : _buildMobileChatBody(
-                        isOffline: isOffline,
-                        isAuthOffline: isAuthOffline,
                         colors: colors,
                         isDark: isDark,
                         selectedDeviceId: selectedDeviceId,
@@ -9109,15 +8861,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   }
 
   Widget _buildMobileChatBody({
-    required bool isOffline,
-    required bool isAuthOffline,
     required ChatColors colors,
     required bool isDark,
     required String? selectedDeviceId,
   }) {
     return _buildChatBodyStack(
-      isOffline: isOffline,
-      isAuthOffline: isAuthOffline,
       colors: colors,
       isDark: isDark,
       selectedDeviceId: selectedDeviceId,
@@ -9125,8 +8873,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
   }
 
   Widget _buildChatBodyStack({
-    required bool isOffline,
-    required bool isAuthOffline,
     required ChatColors colors,
     required bool isDark,
     required String? selectedDeviceId,
@@ -9143,8 +8889,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                       constraints.maxWidth < kChatNarrowLayoutBreakpoint;
                   if (!isNarrow || selectedDeviceId != null) {
                     return _buildMainLayout(
-                      isOffline: isOffline,
-                      isAuthOffline: isAuthOffline,
                       mobileHomeTabs: false,
                       colors: colors,
                       isDark: isDark,
@@ -9163,8 +8907,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                               index: _mobileMainTabIndex,
                               children: [
                                 _buildMainLayout(
-                                  isOffline: isOffline,
-                                  isAuthOffline: isAuthOffline,
                                   mobileHomeTabs: true,
                                   colors: colors,
                                   isDark: isDark,
@@ -9352,11 +9094,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     BuildContext context,
     ChatColors colors,
     bool isDark,
-    bool isLoggedIn,
   ) {
     return ChatSessionBody(
       onRefresh: _refreshSelectedSessionReach,
-      onModeSelected: isLoggedIn ? _confirmAndSwitchMode : null,
+      onModeSelected: null,
       currentUserId: _deviceId,
       deviceName: _deviceName,
       chatController: _chatController,

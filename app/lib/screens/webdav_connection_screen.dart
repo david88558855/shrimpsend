@@ -8,7 +8,6 @@ import '../providers/webdav_provider.dart';
 import '../services/webdav_credential_store.dart';
 import '../services/webdav_session.dart';
 import '../ui/app_ui.dart';
-import '../utils/auth_route_guard.dart';
 import '../utils/toast.dart';
 import '../utils/webdav_membership_gate.dart';
 
@@ -54,7 +53,6 @@ class _WebDavConnectionScreenState extends ConsumerState<WebDavConnectionScreen>
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (!ensureLoggedInForRoute(context, ref)) return;
       if (_isEdit) {
         _loadMeta();
       } else {

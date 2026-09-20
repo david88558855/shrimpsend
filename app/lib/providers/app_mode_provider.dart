@@ -1,29 +1,21 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'auth_provider.dart';
-import 'auth_session_provider.dart';
-import '../services/auth_session_controller.dart';
-
 enum AppMode { online, offline }
 
+/// 始终返回离线/LAN模式 —— 应用不再需要云账户
 final appModeProvider = Provider<AppMode>((ref) {
-  final auth = ref.watch(authProvider);
-  return auth.isLoggedIn ? AppMode.online : AppMode.offline;
+  return AppMode.offline;
 });
 
 final isOfflineModeProvider = Provider<bool>((ref) {
-  return ref.watch(appModeProvider) == AppMode.offline;
+  return true;
 });
 
 final isOnlineModeProvider = Provider<bool>((ref) {
-  return ref.watch(appModeProvider) == AppMode.online;
+  return false;
 });
 
-/// 综合未登录、验证中、会话过期、服务器不可达时的离线 fallback（LAN 仍可用）。
+/// 始终为 true —— 应用始终以离线模式运行
 final effectiveOfflineModeProvider = Provider<bool>((ref) {
-  final phase = ref.watch(authSessionPhaseProvider);
-  return phase == AuthSessionPhase.unauthenticated ||
-      phase == AuthSessionPhase.validating ||
-      phase == AuthSessionPhase.sessionExpired ||
-      phase == AuthSessionPhase.networkUnavailable;
+  return true;
 });

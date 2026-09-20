@@ -14,7 +14,6 @@ import 'package:flutter_desktop_updater/flutter_desktop_updater.dart'
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:simple_icons/simple_icons.dart';
 import 'package:permission_handler/permission_handler.dart';
-import '../api/api.dart';
 import '../color_theme.dart';
 import '../color_theme_store.dart';
 import '../config/env.dart';
@@ -24,18 +23,14 @@ import '../l10n/generated/app_localizations.dart';
 import '../preferences/clipboard_preferences.dart';
 import '../preferences/country_cluster.dart';
 import '../preferences/locale_region_store.dart';
-import '../providers/auth_provider.dart';
 import '../file_save_preferences.dart';
 import '../logger.dart';
-import '../providers/app_mode_provider.dart';
 import '../providers/app_update_provider.dart';
-import '../providers/webdav_provider.dart';
 import '../theme_store.dart';
 import '../ui/app_ui.dart';
 import '../utils/effective_save_dir_display.dart';
 import '../utils/gallery_permission.dart';
 import '../utils/toast.dart';
-import '../utils/webdav_membership_gate.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../services/app_update_service.dart';
 import '../services/analytics/analytics.dart';
@@ -65,7 +60,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool get _isDesktop =>
       Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 
-  S3StorageMode _s3Mode = S3StorageMode.disabled;
   bool _loading = true;
   bool _saveToGallery = false;
   bool _deleteCacheAfterSave = true;
@@ -76,8 +70,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String _effectiveSaveDir = '';
   ReceiveDirResolution? _receiveDirResolution;
   ReceiveDirFallbackInfo? _receiveDirFallback;
-  UserProfile? _profile;
-  MembershipMe? _membership;
 
   @override
   void initState() {
@@ -87,11 +79,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Future<void> _load() async {
     try {
-      final isLoggedIn = ref.read(authProvider).isLoggedIn;
       final futures = <Future>[
-        isLoggedIn
-            ? getS3Config().catchError((_) => S3ConfigDetail.disabled())
-            : Future.value(S3ConfigDetail.disabled()),
         getSaveToGallery(),
         getDeleteCacheAfterSave(),
         getAutoCopyReceivedText(),
@@ -101,34 +89,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         Platform.isWindows
             ? WindowsLaunchAtStartupService.getEnabledPreference()
             : Future.value(false),
-        isLoggedIn
-            ? fetchUserProfile()
-                  .then<UserProfile?>((v) => v)
-                  .catchError((_) => null)
-            : Future.value(null),
-        isLoggedIn
-            ? fetchMyMembership()
-                  .then<MembershipMe?>((v) => v)
-                  .catchError((_) => null)
-            : Future.value(null),
       ];
       final results = await Future.wait(futures);
-      final s3Detail = results[0] as S3ConfigDetail;
-      final saveToGallery = results[1] as bool;
-      final deleteCache = results[2] as bool;
-      final autoCopyReceivedText = results[3] as bool;
-      final customSaveDirOrUri = results[4] as String?;
-      final receiveResolution = results[5] as ReceiveDirResolution;
-      final receiveFallback = results[6] as ReceiveDirFallbackInfo?;
-      final windowsLaunchAtStartup = results[7] as bool;
-      final profile = results[8] as UserProfile?;
-      final membership = results[9] as MembershipMe?;
+      final saveToGallery = results[0] as bool;
+      final deleteCache = results[1] as bool;
+      final autoCopyReceivedText = results[2] as bool;
+      final customSaveDirOrUri = results[3] as String?;
+      final receiveResolution = results[4] as ReceiveDirResolution;
+      final receiveFallback = results[5] as ReceiveDirFallbackInfo?;
+      final windowsLaunchAtStartup = results[6] as bool;
       logSettings.info(
-        'settings_screen load S3 mode=${s3Detail.mode.name} saveToGallery=$saveToGallery deleteCache=$deleteCache windowsLaunchAtStartup=$windowsLaunchAtStartup customSave=${customSaveDirOrUri ?? receiveResolution.customSafTreeUri} effectiveSaveDir=${receiveResolution.path} receiveKind=${receiveResolution.kind.name} fallback=${receiveResolution.usedFallback}',
+        'settings_screen load saveToGallery=$saveToGallery deleteCache=$deleteCache windowsLaunchAtStartup=$windowsLaunchAtStartup customSave=${customSaveDirOrUri ?? receiveResolution.customSafTreeUri} effectiveSaveDir=${receiveResolution.path} receiveKind=${receiveResolution.kind.name} fallback=${receiveResolution.usedFallback}',
       );
       if (mounted) {
         setState(() {
-          _s3Mode = s3Detail.mode;
           _saveToGallery = saveToGallery;
           _deleteCacheAfterSave = deleteCache;
           _autoCopyReceivedText = autoCopyReceivedText;
@@ -139,8 +113,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           _effectiveSaveDir = _formatEffectiveSaveDir(receiveResolution);
           _receiveDirResolution = receiveResolution;
           _receiveDirFallback = receiveFallback;
-          _profile = profile;
-          _membership = membership;
         });
       }
     } catch (e) {
@@ -271,8 +243,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final theme = Theme.of(context);
     final colors = context.appColors;
     final l10n = AppLocalizations.of(context);
-    final isOffline = ref.watch(effectiveOfflineModeProvider);
-    final isLoggedIn = ref.watch(authProvider).isLoggedIn;
     final supportsCustomSaveDirPicker =
         Platform.isAndroid ||
         Platform.isWindows ||
@@ -322,197 +292,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _SectionTitle(
-                          title: l10n.settingsSectionFeatures,
-                          color: colors.textSecondary,
-                        ),
-                        const SizedBox(height: AppSpacing.xs),
-                        _buildCard(
-                          children: [
-                            if (!isLoggedIn)
-                              _buildNavItem(
-                                context: context,
-                                icon: LucideIcons.logIn,
-                                iconBgColor: theme.colorScheme.primary
-                                    .withValues(alpha: 0.12),
-                                iconColor: theme.colorScheme.primary,
-                                title: l10n.settingsNavLogin,
-                                subtitle: l10n.settingsNavLoginSubtitle,
-                                trailing: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: AppSpacing.xs,
-                                    vertical: 3,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: theme
-                                        .colorScheme
-                                        .surfaceContainerHighest,
-                                    borderRadius: AppRadius.small,
-                                  ),
-                                  child: Text(
-                                    l10n.settingsBadgeNotSignedIn,
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                                onTap: () {
-                                  Navigator.of(context).pushNamed('/login');
-                                },
-                              )
-                            else
-                              _buildNavItem(
-                                context: context,
-                                icon: LucideIcons.circleUserRound,
-                                iconBgColor: theme.colorScheme.primary
-                                    .withValues(alpha: 0.12),
-                                iconColor: theme.colorScheme.primary,
-                                title:
-                                    _profile?.email ??
-                                    l10n.settingsNavPersonalAccount,
-                                subtitle: l10n.settingsNavAccountSubtitle,
-                                onTap: () async {
-                                  await Navigator.pushNamed(
-                                    context,
-                                    '/account',
-                                  );
-                                  _load();
-                                },
-                              ),
-                            if (isLoggedIn) ...[
-                              Divider(
-                                height: 1,
-                                color: colors.border,
-                                indent:
-                                    AppSpacing.md +
-                                    AppSize.settingsIcon +
-                                    AppSpacing.sm,
-                              ),
-                              _buildNavItem(
-                                context: context,
-                                icon: LucideIcons.crown,
-                                iconBgColor:
-                                    (_membership != null &&
-                                        _membership!.tierCode.toUpperCase() !=
-                                            'FREE')
-                                    ? const Color(
-                                        0xFFF59E0B,
-                                      ).withValues(alpha: 0.16)
-                                    : colors.surfaceMuted,
-                                iconColor:
-                                    (_membership != null &&
-                                        _membership!.tierCode.toUpperCase() !=
-                                            'FREE')
-                                    ? const Color(0xFFF59E0B)
-                                    : colors.textSecondary,
-                                title:
-                                    (_membership != null &&
-                                        _membership!.tierCode.toUpperCase() !=
-                                            'FREE')
-                                    ? l10n.settingsMembershipTierName(
-                                        _membership!.tierName,
-                                      )
-                                    : l10n.settingsMembershipCenter,
-                                subtitle:
-                                    (_membership != null &&
-                                        _membership!.tierCode.toUpperCase() !=
-                                            'FREE')
-                                    ? l10n.settingsMembershipDevices(
-                                        _membership!.currentDeviceCount,
-                                        _membership!.deviceLimit,
-                                      )
-                                    : l10n.settingsMembershipSubtitleUpgrade,
-                                onTap: () async {
-                                  await Navigator.pushNamed(
-                                    context,
-                                    '/settings/membership',
-                                  );
-                                  _load();
-                                },
-                              ),
-                              Divider(
-                                height: 1,
-                                color: colors.border,
-                                indent:
-                                    AppSpacing.md +
-                                    AppSize.settingsIcon +
-                                    AppSpacing.sm,
-                              ),
-                              _buildNavItem(
-                                context: context,
-                                icon: LucideIcons.monitorSmartphone,
-                                iconBgColor: AppColorTheme.lavender.accent
-                                    .withValues(alpha: 0.16),
-                                iconColor: AppColorTheme.lavender.accent,
-                                title: l10n.settingsNavMyDevices,
-                                subtitle: isOffline
-                                    ? l10n.settingsNavMyDevicesSubtitleOffline
-                                    : l10n.settingsNavMyDevicesSubtitleOnline,
-                                onTap: () =>
-                                    Navigator.pushNamed(context, '/devices'),
-                              ),
-                              Divider(
-                                height: 1,
-                                color: colors.border,
-                                indent:
-                                    AppSpacing.md +
-                                    AppSize.settingsIcon +
-                                    AppSpacing.sm,
-                              ),
-                              _buildNavItem(
-                                context: context,
-                                icon: LucideIcons.cloud,
-                                iconBgColor: AppColorTheme.s3Color.withValues(
-                                  alpha: 0.14,
-                                ),
-                                iconColor: AppColorTheme.s3Color,
-                                title: l10n.settingsNavS3,
-                                subtitle: l10n.settingsNavS3Subtitle,
-                                trailing: _buildS3StatusBadge(context),
-                                onTap: () async {
-                                  await Navigator.pushNamed(
-                                    context,
-                                    '/settings/s3',
-                                  );
-                                  _load();
-                                },
-                              ),
-                              Divider(
-                                height: 1,
-                                color: colors.border,
-                                indent:
-                                    AppSpacing.md +
-                                    AppSize.settingsIcon +
-                                    AppSpacing.sm,
-                              ),
-                              _buildNavItem(
-                                context: context,
-                                icon: LucideIcons.hardDrive,
-                                iconBgColor: theme.colorScheme.primary
-                                    .withValues(alpha: 0.12),
-                                iconColor: theme.colorScheme.primary,
-                                title: l10n.settingsNavWebDav,
-                                subtitle: _webDavNavSubtitle(l10n, ref),
-                                trailing: _buildWebDavStatusBadge(context, ref),
-                                onTap: () async {
-                                  await Navigator.pushNamed(
-                                    context,
-                                    '/settings/webdav',
-                                  );
-                                  if (mounted) {
-                                    ref
-                                        .read(
-                                          webDavConnectionsProvider.notifier,
-                                        )
-                                        .refresh();
-                                  }
-                                },
-                              ),
-                            ],
-                          ],
-                        ),
-                        const SizedBox(height: AppSpacing.lg),
                         _SectionTitle(
                           title: l10n.settingsSectionPreferences,
                           color: colors.textSecondary,
@@ -1130,9 +909,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Future<void> _openFeedback(BuildContext context) async {
-    await FeedmatterBootstrap.syncUserFromAuth(ref.read(authProvider));
-    if (!context.mounted) return;
-
     final themeOptions = FeedmatterBootstrap.themeOptionsFrom(context);
     final lr = LocaleRegionStoreScope.of(context).notifier.value;
     final uiOptions = FeedMatterUiOptions(
@@ -1151,105 +927,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       context,
       theme: themeOptions,
       child: FeedmatterFeedbackScreen(options: uiOptions),
-    );
-  }
-
-  Widget _buildS3StatusBadge(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = context.appColors;
-    final l10n = AppLocalizations.of(context);
-    final Color background;
-    final Color foreground;
-    final String label;
-    switch (_s3Mode) {
-      case S3StorageMode.custom:
-        background = colors.successSurface;
-        foreground = colors.success;
-        label = l10n.settingsS3StatusCustom;
-        break;
-      case S3StorageMode.hosted:
-        final scheme = theme.colorScheme;
-        background = scheme.primary.withValues(alpha: 0.12);
-        foreground = scheme.primary;
-        label = l10n.settingsS3StatusHosted;
-        break;
-      case S3StorageMode.disabled:
-        background = colors.surfaceMuted;
-        foreground = colors.textSecondary;
-        label = l10n.settingsS3StatusNotConfigured;
-        break;
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.xs,
-        vertical: 3,
-      ),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: AppRadius.small,
-      ),
-      child: Text(
-        label,
-        style: theme.textTheme.labelSmall?.copyWith(
-          color: foreground,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
-
-  String _webDavNavSubtitle(AppLocalizations l10n, WidgetRef ref) {
-    final count = ref.watch(webDavConnectionsProvider).valueOrNull?.length ?? 0;
-    if (count == 0 && !membershipCanAddWebDav(_membership)) {
-      return l10n.settingsWebDavMemberOnly;
-    }
-    return l10n.settingsNavWebDavSubtitle;
-  }
-
-  Widget _buildWebDavStatusBadge(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final colors = context.appColors;
-    final l10n = AppLocalizations.of(context);
-    final webDavAsync = ref.watch(webDavConnectionsProvider);
-    final count = webDavAsync.valueOrNull?.length ?? 0;
-    final canAddWebDav = membershipCanAddWebDav(_membership);
-
-    final Color background;
-    final Color foreground;
-    final String label;
-    if (count == 0) {
-      if (!canAddWebDav) {
-        background = colors.surfaceMuted;
-        foreground = colors.textSecondary;
-        label = l10n.settingsWebDavMemberOnly;
-      } else {
-        background = colors.surfaceMuted;
-        foreground = colors.textSecondary;
-        label = l10n.settingsWebDavStatusNone;
-      }
-    } else {
-      final scheme = theme.colorScheme;
-      background = scheme.primary.withValues(alpha: 0.12);
-      foreground = scheme.primary;
-      label = l10n.settingsWebDavStatusCount(count);
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.xs,
-        vertical: 3,
-      ),
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: AppRadius.small,
-      ),
-      child: Text(
-        label,
-        style: theme.textTheme.labelSmall?.copyWith(
-          color: foreground,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
     );
   }
 
@@ -1650,42 +1327,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (!mounted) return;
 
     final beforeCluster = serviceRegionForCountryCode(current.countryCode);
-    final snapshot = LocaleRegionState(
-      locale: current.locale,
-      countryCode: current.countryCode,
-      localeGateCompleted: current.localeGateCompleted,
-    );
 
     final clusterSwitch = beforeCluster != serviceRegionForCountryCode(newCode);
-    final loggedIn = ref.read(authProvider).isLoggedIn;
-
-    // 与线上/本地无关：只要服务集群（CN vs 非 CN）变化且已登录，即提示退出，便于本地调试复现。
-    if (clusterSwitch && loggedIn) {
-      final ok = await showDialog<bool>(
-        context: context,
-        useRootNavigator: true,
-        builder: (ctx) => AlertDialog(
-          title: Text(l10n.serverClusterSwitchTitle),
-          content: Text(l10n.serverClusterSwitchMessage),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(l10n.cancel),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text(l10n.confirm),
-            ),
-          ],
-        ),
-      );
-      if (ok != true || !mounted) return;
-      await ref.read(authProvider.notifier).clearAuth();
-      await store.restoreState(snapshot);
-      if (!mounted) return;
-      Navigator.of(context).pushNamedAndRemoveUntil('/', (_) => false);
-      return;
-    }
 
     await store.setCountryCode(newCode);
   }

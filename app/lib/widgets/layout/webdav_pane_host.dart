@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/webdav.dart';
-import '../../providers/auth_provider.dart';
 import '../../providers/webdav_provider.dart';
 import '../../screens/webdav_shell_screen.dart';
 
@@ -45,10 +44,6 @@ class _WebDavPaneHostState extends ConsumerState<WebDavPaneHost> {
   }
 
   void _pruneStaleShells() {
-    if (!ref.read(authProvider).isLoggedIn) {
-      _materializedShells.clear();
-      return;
-    }
     final liveIds = {
       for (final conn
           in ref.read(webDavConnectionsProvider).valueOrNull ??
@@ -68,11 +63,6 @@ class _WebDavPaneHostState extends ConsumerState<WebDavPaneHost> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen<AuthState>(authProvider, (prev, next) {
-      if (prev?.isLoggedIn == true && !next.isLoggedIn) {
-        setState(() => _materializedShells.clear());
-      }
-    });
     ref.listen(webDavConnectionsProvider, (_, __) {
       if (!mounted) return;
       setState(_pruneStaleShells);

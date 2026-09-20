@@ -121,17 +121,10 @@ class _MessageSearchScreenState extends State<MessageSearchScreen> {
     }
   }
 
+  /// 离线模式仅搜索离线用户的消息
   Future<List<String>> _localSearchUserIds() async {
-    final ids = <String>[];
-    final userId = await getStoredUserId();
-    if (userId != null && userId.isNotEmpty) {
-      ids.add(userId);
-    }
     final offlineId = await getOrCreateOfflineUserId();
-    if (!ids.contains(offlineId)) {
-      ids.add(offlineId);
-    }
-    return ids;
+    return [offlineId];
   }
 
   void _onScroll() {

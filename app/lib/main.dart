@@ -24,8 +24,6 @@ import 'typography.dart';
 import 'shortcut_preferences.dart';
 import 'logger.dart';
 import 'providers/app_locale.dart';
-import 'providers/auth_provider.dart';
-import 'providers/auth_session_provider.dart';
 import 'providers/pending_files_provider.dart';
 import 'models/pending_file_entry.dart';
 import 'theme_store.dart';
@@ -34,10 +32,7 @@ import 'l10n/app_brand.dart';
 import 'l10n/generated/app_localizations.dart';
 import 'preferences/locale_region_store.dart';
 import 'screens/app_entry_screen.dart';
-import 'screens/login_screen.dart';
-import 'screens/devices_screen.dart';
 import 'screens/file_manager_screen.dart';
-import 'screens/account_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/font_settings_screen.dart';
 import 'screens/shortcut_settings_screen.dart';
@@ -46,10 +41,8 @@ import 'screens/webdav_settings_screen.dart';
 import 'screens/webdav_connection_screen.dart';
 import 'screens/version_history_screen.dart';
 import 'screens/app_log_screen.dart';
-import 'screens/membership_screen.dart';
 import 'services/app_update_service.dart';
 import 'widgets/app_update_dialog.dart';
-import 'widgets/auth_session_lifecycle.dart';
 import 'widgets/desktop_update_banner.dart';
 import 'services/app_log_file.dart';
 import 'services/database.dart';
@@ -207,35 +200,27 @@ Future<void> _bootstrap(List<String> args) async {
   }
 
   final container = ProviderContainer();
-  await container.read(authProvider.notifier).loadFromStorage();
-  final isLoggedIn = container.read(authProvider).isLoggedIn;
-  final offlineWithoutLogin = await loadOfflineWithoutLogin();
-  await localeRegionStore.applyLoggedInDefaultsIfNeeded(isLoggedIn);
-  logBoot.info('boot: auth/provider state loaded');
-
-  final authSession = container.read(authSessionControllerProvider.notifier);
-  authSession.onStorageLoaded(isLoggedIn: isLoggedIn);
-
+  logBoot.info('boot: app state initialized');
   Future<void> waitForStartupNetworkIfNeeded() async {
     if (!Platform.isWindows || !launchedAtStartup) return;
 
     const maxWait = Duration(seconds: 30);
     const pollInterval = Duration(seconds: 1);
     final deadline = DateTime.now().add(maxWait);
-    logAuth.info(
+    logBoot.info(
       'startup network wait: begin maxWait=${maxWait.inSeconds}s',
     );
 
     while (DateTime.now().isBefore(deadline)) {
       final results = await Connectivity().checkConnectivity();
       if (results.any((r) => r != ConnectivityResult.none)) {
-        logAuth.info('startup network wait: connectivity available');
+        logBoot.info('startup network wait: connectivity available');
         return;
       }
       await Future.delayed(pollInterval);
     }
 
-    logAuth.warning(
+    logBoot.warning(
       'startup network wait: timed out after ${maxWait.inSeconds}s, continuing',
     );
   }
@@ -250,37 +235,7 @@ Future<void> _bootstrap(List<String> args) async {
 
   final navigatorKey = GlobalKey<NavigatorState>();
 
-  Future<void> invalidateSessionAndNavigate() async {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ctx = navigatorKey.currentContext;
-      if (ctx != null && ctx.mounted) {
-        Navigator.of(
-          ctx,
-        ).pushNamedAndRemoveUntil('/login', (route) => route.isFirst);
-        final loc = localeRegionStore.notifier.value.locale;
-        AppToast.show(
-          ctx,
-          message: lookupAppLocalizations(loc).loginSessionExpired,
-        );
-      }
-    });
-  }
-
-  authSession.onSessionExpiredNavigate = invalidateSessionAndNavigate;
-
-  setAuthRetryHandler(authSession.handle401WithRetry);
-
-  if (isLoggedIn) {
-    unawaited(
-      authSession.bootstrapSession(
-        useRetry: launchedAtStartup || RuntimePlatform.isDesktop,
-        waitForNetwork: waitForStartupNetworkIfNeeded,
-      ),
-    );
-  }
-
-  logAuth.info('main auth loaded, isLoggedIn=$isLoggedIn');
-
+  logBoot.info('boot: app state initialized');
   // Boot env snapshot is scheduled to run after the first frame (see below):
   // on cold start the IDE debug console attaches *after* main() begins, so
   // any log emitted before the first paint is silently dropped. Hot
@@ -305,7 +260,6 @@ Future<void> _bootstrap(List<String> args) async {
       colorThemeStore: colorThemeStore,
       fontSizeStore: fontSizeStore,
       localeRegionStore: localeRegionStore,
-      initialOfflineWithoutLogin: offlineWithoutLogin,
     ),
   );
   // Desktop: skip global glass wrap to reduce route-transition cost; narrow
@@ -618,7 +572,6 @@ class MyApp extends StatelessWidget {
   final ColorThemeStore colorThemeStore;
   final FontSizeStore fontSizeStore;
   final LocaleRegionStore localeRegionStore;
-  final bool initialOfflineWithoutLogin;
 
   const MyApp({
     super.key,
@@ -627,7 +580,6 @@ class MyApp extends StatelessWidget {
     required this.colorThemeStore,
     required this.fontSizeStore,
     required this.localeRegionStore,
-    required this.initialOfflineWithoutLogin,
   });
 
   @override
@@ -702,16 +654,11 @@ class MyApp extends StatelessWidget {
                                     AppLocalizations.supportedLocales,
                                 initialRoute: '/',
                                 routes: {
-                                  '/login': (_) => const LoginScreen(),
                                   '/': (_) => AppEntryScreen(
                                     localeRegionStore: localeRegionStore,
-                                    initialOfflineWithoutLogin:
-                                        initialOfflineWithoutLogin,
                                   ),
                                   '/files': (_) => const FileManagerScreen(),
                                   '/settings': (_) => const SettingsScreen(),
-                                  '/settings/membership': (_) =>
-                                      const MembershipScreen(),
                                   '/settings/s3': (_) =>
                                       const S3SettingsScreen(),
                                   '/settings/webdav': (_) =>
@@ -726,8 +673,6 @@ class MyApp extends StatelessWidget {
                                       const VersionHistoryScreen(),
                                   '/settings/app-log': (_) =>
                                       const AppLogScreen(),
-                                  '/devices': (_) => const DevicesScreen(),
-                                  '/account': (_) => const AccountScreen(),
                                 },
                                 builder: (context, child) =>
                                     MediaQuery(
@@ -737,12 +682,10 @@ class MyApp extends StatelessWidget {
                                   child: DesktopFileDropScope(
                                     navigatorKey: navigatorKey,
                                     locale: lr.locale,
-                                    child: AuthSessionLifecycle(
-                                      child: _UpdateCheckWrapper(
+                                    child: _UpdateCheckWrapper(
                                         navigatorKey: navigatorKey,
                                         child: child,
                                       ),
-                                    ),
                                   ),
                                 ),
                               ),

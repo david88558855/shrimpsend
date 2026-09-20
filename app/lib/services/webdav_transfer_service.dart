@@ -245,9 +245,8 @@ class WebDavTransferService extends ChangeNotifier {
     }
   }
 
+  /// 离线模式始终使用离线用户 ID
   Future<String?> _resolveUserId() async {
-    final uid = await getStoredUserId();
-    if (uid != null && uid.isNotEmpty) return uid;
     return getOrCreateOfflineUserId();
   }
 

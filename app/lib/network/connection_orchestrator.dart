@@ -69,7 +69,7 @@ final connectionOrchestratorProvider = Provider<ConnectionOrchestratorState>((
     final verifiedOk =
         c?.available ??
         (manualMode == SendMode.s3
-            ? context.s3Online && allowsAccountTransferModes(context)
+            ? context.s3Online
             : false);
     final attemptable = c?.attemptable ?? false;
     final manualHttpUnverified =
@@ -106,35 +106,13 @@ final connectionOrchestratorProvider = Provider<ConnectionOrchestratorState>((
         );
         statusSubtitle = '';
       }
-    } else if (!context.isLoggedIn) {
-      fallbackToS3 = false;
-      activeMode = null;
-      showS3SetupEntry = false;
-      statusTitle = l10n.connectionOrchestratorNoDirect;
-      statusSubtitle = l10n.connectionOrchestratorLoginPromptSubtitle;
-    } else if (!context.isRegisteredPeer) {
+    } else {
+      // 离线模式：无可用直连时，S3 始终不可用
       fallbackToS3 = false;
       activeMode = null;
       showS3SetupEntry = false;
       statusTitle = l10n.connectionOrchestratorNoDirect;
       statusSubtitle = '';
-    } else {
-      fallbackToS3 = true;
-      if (context.s3Online) {
-        activeMode = SendMode.s3;
-        statusTitle = l10n.connectionOrchestratorAutoS3;
-        statusSubtitle = l10n.connectionOrchestratorNoDirectS3Fallback;
-      } else if (context.s3Configured) {
-        activeMode = null;
-        showS3SetupEntry = false;
-        statusTitle = l10n.connectionOrchestratorNoDirect;
-        statusSubtitle = l10n.connectionOrchestratorS3Unavailable;
-      } else {
-        activeMode = null;
-        showS3SetupEntry = true;
-        statusTitle = l10n.connectionOrchestratorNoDirect;
-        statusSubtitle = l10n.connectionOrchestratorS3NotConfigured;
-      }
     }
   }
 

@@ -13,7 +13,6 @@ import '../services/analytics/analytics.dart';
 import '../services/analytics/analytics_events.dart';
 import '../ui/app_ui.dart';
 import '../ui/platform_icon.dart';
-import '../utils/auth_route_guard.dart';
 import '../utils/toast.dart';
 import '../l10n/generated/app_localizations.dart';
 import '../widgets/app_confirm_dialog.dart';
@@ -34,7 +33,6 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (!ensureLoggedInForRoute(context, ref)) return;
       ref.read(cloudDeviceRosterProvider.notifier).refreshSnapshot();
     });
   }

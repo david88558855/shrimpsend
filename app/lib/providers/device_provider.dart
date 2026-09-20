@@ -7,8 +7,6 @@ import '../api/api.dart';
 import '../device_id.dart';
 import '../lan/lan_discovery.dart';
 import '../logger.dart';
-import 'auth_provider.dart';
-import 'auth_session_provider.dart';
 
 /// Virtual device ID for the S3 cloud relay entry in the device list.
 const s3VirtualDeviceId = '__s3_cloud__';
@@ -93,21 +91,8 @@ class CloudDeviceRosterNotifier
   final Ref ref;
 
   Future<void> refreshSnapshot() async {
-    final auth = ref.read(authProvider);
-    if (!auth.isLoggedIn) {
-      state = const AsyncValue.data([]);
-      return;
-    }
-    try {
-      final devices = await listDevices();
-      ref.read(authSessionControllerProvider.notifier).markServerReachable();
-      state = AsyncValue.data(devices);
-    } catch (e, st) {
-      logChat.warning('cloudDeviceRoster refresh failed: $e');
-      if ((state.valueOrNull ?? const <DeviceDto>[]).isEmpty) {
-        state = AsyncValue.error(e, st);
-      }
-    }
+    // 云账户功能已移除，云端设备列表始终为空
+    state = const AsyncValue.data([]);
   }
 
   void replaceSnapshot(List<DeviceDto> devices) {
@@ -143,18 +128,7 @@ final cloudDeviceRosterProvider =
       AsyncValue<List<DeviceDto>>
     >((ref) {
       final notifier = CloudDeviceRosterNotifier(ref);
-      ref.listen<AuthState>(authProvider, (previous, next) {
-        if (!next.isLoggedIn) {
-          notifier.clear();
-          return;
-        }
-        if (previous?.userId != next.userId) {
-          notifier.refreshSnapshot();
-        }
-      });
-      if (ref.read(authProvider).isLoggedIn) {
-        Future.microtask(notifier.refreshSnapshot);
-      }
+      // 云账户功能已移除，不需要监听登录状态
       return notifier;
     });
 
@@ -201,10 +175,7 @@ final nearbyDevicesProvider = Provider<List<DeviceDto>>((ref) {
 });
 
 final deviceCountProvider = Provider<int>((ref) {
-  final auth = ref.watch(authProvider);
-  if (auth.isLoggedIn) {
-    return ref.watch(myDevicesAsyncProvider).value?.length ?? 0;
-  }
+  // 云账户功能已移除，始终使用 LAN 设备数
   return ref.watch(lanDevicesProvider).valueOrNull?.length ?? 0;
 });
 

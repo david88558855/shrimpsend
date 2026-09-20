@@ -7,29 +7,19 @@ import '../services/webdav_favorite_dao.dart';
 import '../services/webdav_recent_dao.dart';
 import '../services/webdav_transfer_progress_summary.dart';
 import '../services/webdav_transfer_service.dart';
-import 'auth_provider.dart';
 
 class WebDavConnectionsNotifier
     extends AsyncNotifier<List<WebDavConnectionSummary>> {
   @override
   Future<List<WebDavConnectionSummary>> build() async {
-    ref.listen<AuthState>(authProvider, (prev, next) {
-      if (prev?.isLoggedIn == true && !next.isLoggedIn) {
-        WebDavCredentialStore.instance.wipeAll();
-      }
-      if (next.isLoggedIn) {
-        ref.invalidateSelf();
-      }
-    });
-    if (!ref.watch(authProvider).isLoggedIn) return [];
-    return listWebDavConnections();
+    // 云账户功能已移除，WebDAV连接列表始终为空
+    return [];
   }
 
   Future<void> refresh() async {
     state = const AsyncLoading();
     state = await AsyncValue.guard(() async {
-      if (!ref.read(authProvider).isLoggedIn) return [];
-      return listWebDavConnections();
+      return [];
     });
   }
 }

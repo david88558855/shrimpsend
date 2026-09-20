@@ -10,7 +10,6 @@ import '../../network/connection_bar_view_model.dart';
 import '../../network/connection_orchestrator.dart';
 import '../../network/transfer_mode_dot.dart';
 import '../../providers/app_locale.dart';
-import '../../providers/auth_provider.dart';
 import '../../providers/device_provider.dart';
 import '../../ui/app_ui.dart';
 import '../busy_status_indicator.dart';
@@ -43,10 +42,6 @@ class TransferModeBar extends ConsumerWidget {
       }),
     );
     final orchestrator = ref.watch(connectionOrchestratorProvider);
-    final isLoggedIn = ref.watch(authProvider).isLoggedIn;
-    final isRegisteredPeer =
-        selectedDeviceId != null &&
-        ref.watch(myDevicesProvider).any((d) => d.deviceId == selectedDeviceId);
     final l10n = lookupAppLocalizations(ref.watch(appLocaleProvider));
 
     if (selectedDeviceId == null || selectedDeviceId == s3VirtualDeviceId) {
@@ -65,8 +60,6 @@ class TransferModeBar extends ConsumerWidget {
               currentMode: sendMode,
               l10n: l10n,
               localOs: Platform.operatingSystem,
-              isLoggedIn: isLoggedIn,
-              isRegisteredPeer: isRegisteredPeer,
               transferBarLabels: true,
               reach: reach,
             )

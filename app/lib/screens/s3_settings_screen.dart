@@ -10,7 +10,6 @@ import '../services/analytics/analytics.dart';
 import '../services/analytics/analytics_events.dart';
 import '../ui/app_ui.dart';
 import '../services/s3_providers.dart';
-import '../utils/auth_route_guard.dart';
 import '../utils/file_utils.dart';
 import '../utils/toast.dart';
 import '../widgets/app_confirm_dialog.dart';
@@ -97,7 +96,7 @@ class _S3SettingsScreenState extends ConsumerState<S3SettingsScreen> {
     _bucketController.addListener(_onSummaryFieldChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (!ensureLoggedInForRoute(context, ref)) return;
+      if (!mounted) return;
       _load();
     });
   }

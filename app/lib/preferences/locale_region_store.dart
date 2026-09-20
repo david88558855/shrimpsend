@@ -104,32 +104,6 @@ class LocaleRegionStore {
     );
   }
 
-  /// Logged-in users without saved prefs: 国内默认 zh_CN + CN；出海包默认 en + US；gate 已完成。
-  Future<void> applyLoggedInDefaultsIfNeeded(bool isLoggedIn) async {
-    if (!isLoggedIn) return;
-    final prefs = await SharedPreferences.getInstance();
-    final hasLocale = prefs.containsKey(_keyLocaleTag);
-    final hasCountry = prefs.containsKey(_keyCountryCode);
-    final hasLegacyRegion = prefs.containsKey(_keyServiceRegion);
-    if (hasLocale && (hasCountry || hasLegacyRegion)) return;
-
-    final fallback = LocaleRegionState(
-      locale: Env.overseasBuild ? const Locale('en') : const Locale('zh', 'CN'),
-      countryCode: Env.overseasBuild ? 'US' : 'CN',
-      localeGateCompleted: true,
-    );
-    await prefs.setString(_keyLocaleTag, _tagFromLocale(fallback.locale));
-    await prefs.setString(_keyCountryCode, fallback.countryCode);
-    await prefs.setString(
-      _keyServiceRegion,
-      fallback.serviceRegion.storageValue,
-    );
-    await prefs.setBool(_keyGateCompleted, true);
-
-    Env.setProdServiceRegion(fallback.serviceRegion);
-    notifier.value = fallback;
-  }
-
   Future<void> setLocale(Locale locale) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyLocaleTag, _tagFromLocale(locale));

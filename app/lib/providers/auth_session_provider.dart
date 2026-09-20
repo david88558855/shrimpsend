@@ -1,24 +1,13 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/auth_session_controller.dart';
-import 'auth_provider.dart';
 
-final authSessionControllerProvider =
-    StateNotifierProvider<AuthSessionController, AuthSessionPhase>((ref) {
-  final controller = AuthSessionController(ref);
-  ref.listen<AuthState>(authProvider, (prev, next) {
-    if (prev?.isLoggedIn == true && !next.isLoggedIn) {
-      controller.syncLoggedOutFromAuth();
-    }
-  });
-  return controller;
-});
-
+/// 始终返回 unauthenticated — 云账户功能已移除，应用以纯离线/LAN模式运行。
 final authSessionPhaseProvider = Provider<AuthSessionPhase>((ref) {
-  return ref.watch(authSessionControllerProvider);
+  return AuthSessionPhase.unauthenticated;
 });
 
-/// 云端功能（Centrifugo、设备列表、S3 云传输等）是否可用。
+/// 云端功能始终不可用。
 final isCloudSessionActiveProvider = Provider<bool>((ref) {
-  return ref.watch(authSessionPhaseProvider) == AuthSessionPhase.authenticated;
+  return false;
 });

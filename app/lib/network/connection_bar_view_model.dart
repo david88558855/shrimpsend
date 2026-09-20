@@ -96,8 +96,6 @@ final connectionBarViewModelProvider = Provider<ConnectionBarViewModel?>((ref) {
       candidates: orchestrator.candidates,
       currentMode: sendMode,
       localOs: context.localOs,
-      isLoggedIn: context.isLoggedIn,
-      isRegisteredPeer: context.isRegisteredPeer,
       l10n: l10n,
     ),
     primaryActionLabel:
@@ -111,18 +109,13 @@ List<ConnectionBarModeItem> buildConnectionBarModeItems({
   required SendMode currentMode,
   required AppLocalizations l10n,
   String? localOs,
-  bool isLoggedIn = true,
-  bool isRegisteredPeer = true,
   bool transferBarLabels = false,
   DeviceReachDetail? reach,
 }) {
   final visible = visibleConnectionCandidatesForUi(
     candidates: candidates,
-    isLoggedIn: isLoggedIn,
-    isRegisteredPeer: isRegisteredPeer,
   );
-  final accountModes = isLoggedIn && isRegisteredPeer;
-  final modeForSelection = accountModes ? currentMode : SendMode.nearby;
+  final modeForSelection = currentMode;
 
   final byMode = <SendMode, ConnectionBarModeItem>{};
   final reachDetail = reach ?? DeviceReachDetail.offlineDetail;
@@ -158,7 +151,7 @@ List<ConnectionBarModeItem> buildConnectionBarModeItems({
           ? transferModeBarLabel(modeForSelection, l10n: l10n)
           : connectionModeLabel(modeForSelection, localOs: localOs, l10n: l10n),
       available: false,
-      attemptable: modeForSelection == SendMode.lan && isLoggedIn,
+      attemptable: modeForSelection == SendMode.lan,
       isSelected: true,
       reachKnownOnline: switch (modeForSelection) {
         SendMode.webrtc => reach?.webrtc,

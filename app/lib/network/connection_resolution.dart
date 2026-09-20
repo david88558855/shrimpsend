@@ -2,9 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../api/devices.dart';
 import '../l10n/generated/app_localizations.dart';
-import '../providers/auth_provider.dart';
 import '../providers/device_provider.dart';
 import 'link_models.dart';
 import 'link_strategy.dart';
@@ -38,8 +36,6 @@ class SelectedConnectionContext {
     required this.reach,
     required this.s3Configured,
     required this.s3Online,
-    required this.isLoggedIn,
-    required this.isRegisteredPeer,
   });
 
   final String selectedDeviceId;
@@ -50,15 +46,6 @@ class SelectedConnectionContext {
   final bool s3Configured;
   /// CUSTOM: presigned HEAD from client; HOSTED: configured only.
   final bool s3Online;
-  final bool isLoggedIn;
-  /// Peer is registered under the current account (not LAN-only external).
-  final bool isRegisteredPeer;
-}
-
-/// Account-backed channels (HTTP signaling / WebRTC / S3) require login and a
-/// registered peer. External LAN-discovered devices only support nearby/HTTP direct.
-bool allowsAccountTransferModes(SelectedConnectionContext context) {
-  return context.isLoggedIn && context.isRegisteredPeer;
 }
 
 SelectedConnectionContext? watchSelectedConnectionContext(Ref ref) {
@@ -69,10 +56,6 @@ SelectedConnectionContext? watchSelectedConnectionContext(Ref ref) {
 
   final peer = findDeviceById(ref, selected);
   final localOs = Platform.operatingSystem;
-  final isLoggedIn = ref.watch(authProvider).isLoggedIn;
-  final isRegisteredPeer = ref
-      .watch(myDevicesProvider)
-      .any((d) => d.deviceId == selected);
   // Only rebuild when the selected peer's reach detail actually changes,
   // not when any other device's probe progress mutates the whole Map.
   final reach = ref.watch(
@@ -88,8 +71,6 @@ SelectedConnectionContext? watchSelectedConnectionContext(Ref ref) {
     reach: reach,
     s3Configured: ref.watch(s3ConfiguredProvider),
     s3Online: ref.watch(s3OnlineProvider),
-    isLoggedIn: isLoggedIn,
-    isRegisteredPeer: isRegisteredPeer,
   );
 }
 
@@ -156,14 +137,8 @@ String transferModeBarLabel(SendMode mode, {AppLocalizations? l10n}) {
 SendMode resolveSendModeWithMemory({
   required SendMode preferred,
   required List<ConnectionCandidate> candidates,
-  required bool isLoggedIn,
-  required bool isRegisteredPeer,
 }) {
-  final visible = visibleConnectionCandidatesForUi(
-    candidates: candidates,
-    isLoggedIn: isLoggedIn,
-    isRegisteredPeer: isRegisteredPeer,
-  );
+  final visible = visibleConnectionCandidatesForUi(candidates: candidates);
   if (visible.isEmpty) return preferred;
 
   final visibleModes = visible.map((c) => c.mode).toSet();
@@ -190,22 +165,14 @@ SendMode resolveSendModeWithMemory({
 /// Session auto mode: pick the first available mode by direct-first priority.
 SendMode resolveSendModeAutoPreferHttp({
   required List<ConnectionCandidate> candidates,
-  required bool isLoggedIn,
-  required bool isRegisteredPeer,
   SendMode fallback = SendMode.lan,
 }) {
-  final visible = visibleConnectionCandidatesForUi(
-    candidates: candidates,
-    isLoggedIn: isLoggedIn,
-    isRegisteredPeer: isRegisteredPeer,
-  );
+  final visible = visibleConnectionCandidatesForUi(candidates: candidates);
   if (visible.isEmpty) return fallback;
 
   const priority = [
     SendMode.lan,
-    SendMode.webrtc,
     SendMode.nearby,
-    SendMode.s3,
   ];
   for (final mode in priority) {
     for (final c in visible) {
@@ -245,22 +212,13 @@ List<ConnectionCandidate> buildConnectionCandidates({
   return out;
 }
 
-/// 未登录或外部设备时 UI 不展示需账号的渠道（WebRTC/S3）；未登录时仅保留「附近」，
-/// 已登录外部设备保留「附近」与 HTTP 直连。
+/// 纯离线/LAN模式：仅展示 Nearby 和 HTTP LAN 渠道。
 List<ConnectionCandidate> visibleConnectionCandidatesForUi({
   required List<ConnectionCandidate> candidates,
-  required bool isLoggedIn,
-  required bool isRegisteredPeer,
 }) {
-  if (isLoggedIn && isRegisteredPeer) {
-    return List<ConnectionCandidate>.from(candidates);
-  }
-  if (isLoggedIn) {
-    return candidates
-        .where((c) => c.mode == SendMode.nearby || c.mode == SendMode.lan)
-        .toList();
-  }
-  return candidates.where((c) => c.mode == SendMode.nearby).toList();
+  return candidates
+      .where((c) => c.mode == SendMode.nearby || c.mode == SendMode.lan)
+      .toList();
 }
 
 List<({SendMode mode, SmartLinkKind kind})> _expandKind(SmartLinkKind kind) {
@@ -268,13 +226,11 @@ List<({SendMode mode, SmartLinkKind kind})> _expandKind(SmartLinkKind kind) {
     case SmartLinkKind.sameLan:
       return [
         (mode: SendMode.lan, kind: kind),
-        (mode: SendMode.webrtc, kind: kind),
         (mode: SendMode.nearby, kind: kind),
       ];
     case SmartLinkKind.pcHotspot:
       return [
         (mode: SendMode.lan, kind: kind),
-        (mode: SendMode.webrtc, kind: kind),
       ];
     case SmartLinkKind.internetRelay:
       return [(mode: SendMode.s3, kind: kind)];
@@ -294,72 +250,27 @@ List<({SendMode mode, SmartLinkKind kind})> _expandKind(SmartLinkKind kind) {
         reason: ok ? '附近链路可用' : '未发现可用局域网设备',
       );
     case SendMode.lan:
-      if (!context.isLoggedIn) {
-        return (
-          available: false,
-          attemptable: false,
-          reason: '登录后可使用',
-        );
-      }
-      if (!context.isRegisteredPeer) {
-        final directOk = context.reach.directHttp;
-        return (
-          available: directOk,
-          attemptable: context.peer != null,
-          reason: directOk ? 'HTTP 直连可用' : 'HTTP 直连不可达',
-        );
-      }
+      final directOk = context.reach.directHttp;
       final lanOk = httpTransferAvailable(context.reach);
       final pullOnly = httpPullOnlyAvailable(context.reach);
       return (
         available: lanOk,
-        attemptable: true,
+        attemptable: context.peer != null,
         reason: lanOk
             ? (pullOnly ? 'HTTP 反向拉取可用' : 'HTTP 直连可用')
             : 'HTTP 直连不可达',
       );
     case SendMode.webrtc:
-      if (!allowsAccountTransferModes(context)) {
-        return (
-          available: false,
-          attemptable: false,
-          reason: '仅支持账号下已注册设备',
-        );
-      }
-      final rtc = context.reach.webrtc;
-      if (rtc == true) {
-        return (available: true, attemptable: true, reason: 'WebRTC 可用');
-      }
-      if (rtc == false) {
-        return (
-          available: false,
-          attemptable: true,
-          reason: 'WebRTC 信令/ICE 不可达',
-        );
-      }
-      return (available: true, attemptable: true, reason: 'WebRTC 未检测');
+      return (
+        available: false,
+        attemptable: false,
+        reason: '云账户功能已移除，WebRTC不可用',
+      );
     case SendMode.s3:
-      if (!allowsAccountTransferModes(context)) {
-        return (
-          available: false,
-          attemptable: false,
-          reason: '仅支持账号下已注册设备',
-        );
-      }
-      if (!context.s3Configured) {
-        return (
-          available: false,
-          attemptable: false,
-          reason: 'S3 未配置',
-        );
-      }
-      if (!context.s3Online) {
-        return (
-          available: false,
-          attemptable: false,
-          reason: 'S3 不可用',
-        );
-      }
-      return (available: true, attemptable: true, reason: 'S3 可用');
+      return (
+        available: false,
+        attemptable: false,
+        reason: '云账户功能已移除，S3不可用',
+      );
   }
 }

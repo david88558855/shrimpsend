@@ -7,7 +7,7 @@ import '../../l10n/generated/app_localizations.dart';
 import '../../providers/device_provider.dart';
 import '../../providers/webdav_provider.dart';
 import '../../ui/app_ui.dart';
-import '../../services/auth_session_controller.dart';
+import '../../ui/app_ui.dart';
 import 'chat_session_pane_host.dart';
 import 'device_list_panel.dart';
 import 'device_list_panel_width.dart';
@@ -25,16 +25,11 @@ class MainLayout extends ConsumerStatefulWidget {
   final bool connected;
   final String deviceName;
   final bool statusCheckDone;
-  final bool isLoggedIn;
-  final AuthSessionPhase authSessionPhase;
   final VoidCallback onShowSettings;
   final VoidCallback? onSearch;
-  final VoidCallback? onScanTap;
-  final VoidCallback? onAddWebDavTap;
   final VoidCallback? onFileManager;
   final VoidCallback? onOpenS3Settings;
   final Future<void> Function()? onRefresh;
-  final VoidCallback? onLoginTap;
 
   /// Chat header (device session): session-specific actions, e.g. remove peer device.
   final VoidCallback? onSessionDeviceSettings;
@@ -61,16 +56,11 @@ class MainLayout extends ConsumerStatefulWidget {
     required this.deviceName,
     this.myDeviceId,
     this.statusCheckDone = true,
-    this.isLoggedIn = true,
-    this.authSessionPhase = AuthSessionPhase.authenticated,
     required this.onShowSettings,
     this.onSearch,
-    this.onScanTap,
-    this.onAddWebDavTap,
     this.onFileManager,
     this.onOpenS3Settings,
     this.onRefresh,
-    this.onLoginTap,
     this.onSessionDeviceSettings,
     this.isSelectionMode = false,
     this.selectedCount = 0,
@@ -177,15 +167,10 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
                 deviceName: widget.deviceName,
                 myDeviceId: widget.myDeviceId,
                 statusCheckDone: widget.statusCheckDone,
-                isLoggedIn: widget.isLoggedIn,
-                authSessionPhase: widget.authSessionPhase,
                 onShowSettings: widget.onShowSettings,
                 onSearch: widget.onSearch,
-                onScanTap: widget.onScanTap,
-                onAddWebDavTap: widget.onAddWebDavTap,
                 onFileManager: widget.onFileManager,
                 onRefresh: widget.onRefresh,
-                onLoginTap: widget.onLoginTap,
                 showBottomStatusBar: !widget.compactDeviceListChrome,
                 showHeaderFileAndSettings: !widget.compactDeviceListChrome,
                 showHeaderRefresh: widget.compactDeviceListChrome,
@@ -345,15 +330,10 @@ class _MainLayoutState extends ConsumerState<MainLayout> {
       deviceName: widget.deviceName,
       myDeviceId: widget.myDeviceId,
       statusCheckDone: widget.statusCheckDone,
-      isLoggedIn: widget.isLoggedIn,
-      authSessionPhase: widget.authSessionPhase,
       onShowSettings: widget.onShowSettings,
       onSearch: widget.onSearch,
-      onScanTap: widget.onScanTap,
-      onAddWebDavTap: widget.onAddWebDavTap,
       onFileManager: widget.onFileManager,
       onRefresh: widget.onRefresh,
-      onLoginTap: widget.onLoginTap,
       showBottomStatusBar: !widget.compactDeviceListChrome,
       showHeaderFileAndSettings: !widget.compactDeviceListChrome,
       showHeaderRefresh: true,

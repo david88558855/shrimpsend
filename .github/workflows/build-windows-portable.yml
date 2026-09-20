@@ -1,0 +1,80 @@
+name: Build Windows x64 Portable
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'packages/**'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Prepare secret stubs
+        shell: pwsh
+        run: |
+          # 离线模式不需要真实密钥，从 example 复制空模板
+          $cfgDir = 'app/lib/config'
+          Copy-Item "$cfgDir/env.secrets.example.dart" "$cfgDir/env.secrets.dart" -Force
+          Copy-Item "$cfgDir/openpanel_env.secrets.example.dart" "$cfgDir/openpanel_env.secrets.dart" -Force
+          Copy-Item "$cfgDir/feedmatter_env.secrets.example.dart" "$cfgDir/feedmatter_env.secrets.dart" -Force
+
+      - name: Install dependencies
+        working-directory: app
+        run: flutter pub get
+
+      - name: Generate l10n
+        working-directory: app
+        run: flutter gen-l10n
+
+      - name: Enable Windows font assets
+        working-directory: app
+        shell: pwsh
+        run: .\scripts\windows_font_assets.ps1 enable
+
+      - name: Ensure pdfium dependency
+        working-directory: app
+        shell: pwsh
+        run: .\scripts\ensure_windows_pdfium.ps1
+
+      - name: Build Windows release
+        working-directory: app
+        run: flutter build windows --release --dart-define=OVERSEAS_BUILD=false
+
+      - name: Copy VC runtime DLLs
+        shell: pwsh
+        run: |
+          $releaseDir = 'app/build/windows/x64/runner/Release'
+          $vcDir = 'app/windows/vc_redist/x64'
+          foreach ($dll in @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')) {
+            Copy-Item (Join-Path $vcDir $dll) (Join-Path $releaseDir $dll) -Force
+          }
+
+      - name: Package portable ZIP
+        shell: pwsh
+        run: |
+          $releaseDir = 'app/build/windows/x64/runner/Release'
+          # 从 pubspec.yaml 读取版本号
+          $yaml = Get-Content 'app/pubspec.yaml' -Raw
+          if ($yaml -match '(?m)^version:\s*(\S+)') { $ver = $Matches[1] } else { $ver = '0.0.0' }
+          $zipName = "Shrimpsend-windows-cn-$ver.zip"
+          Compress-Archive -Path (Join-Path $releaseDir '*') -DestinationPath $zipName -Force
+          Write-Host "Created: $zipName"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-portable
+          path: Shrimpsend-windows-cn-*.zip
+          retention-days: 30
